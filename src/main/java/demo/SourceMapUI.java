@@ -1,6 +1,8 @@
 package demo;
 
 import burp.api.montoya.MontoyaApi;
+import burp.api.montoya.core.ToolSource;
+import burp.api.montoya.core.ToolType;
 import burp.api.montoya.http.message.requests.HttpRequest;
 import burp.api.montoya.http.message.responses.HttpResponse;
 import burp.api.montoya.ui.editor.EditorOptions;
@@ -19,9 +21,7 @@ import java.awt.event.MouseEvent;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 
@@ -36,9 +36,8 @@ public class SourceMapUI {
     private final HttpResponseEditor responseViewer;
     private final List<SourceMapResult> results;
     private final List<SourceMapResult> filteredResults;
-    private final Set<String> processedUrls = new HashSet<>();
     private final JTextField searchField;
-    private final JCheckBox deduplicateCheckbox;
+    private final JTextField excludeField;
     // 添加状态码范围筛选复选框
     private final JCheckBox status2xxCheckbox;
     private final JCheckBox status3xxCheckbox;
@@ -81,18 +80,14 @@ public class SourceMapUI {
         searchField.addActionListener(e -> filterResults());
         controlPanel.add(new JLabel("搜索域名:"));
         controlPanel.add(searchField);
-        
-        // 添加去重复选框
-        deduplicateCheckbox = new JCheckBox("是否去重", false);
-        deduplicateCheckbox.addActionListener(e -> {
-            // 当更改去重选项时，需要重新处理所有结果
-            if (!deduplicateCheckbox.isSelected()) {
-                processedUrls.clear();
-            }
-            filterResults();
-        });
-        controlPanel.add(deduplicateCheckbox);
-        
+
+        // 添加排除域名输入框
+        excludeField = new JTextField(16);
+        excludeField.setToolTipText("排除指定域名，多个以|分隔，如 baidu.com|google.com");
+        excludeField.addActionListener(e -> filterResults());
+        controlPanel.add(new JLabel("排除域名:"));
+        controlPanel.add(excludeField);
+
         // 添加状态码范围筛选复选框
         status2xxCheckbox = new JCheckBox("2XX", true);
         status2xxCheckbox.addActionListener(e -> filterResults());
@@ -304,26 +299,13 @@ public class SourceMapUI {
     }
     
     private void addResult(SourceMapResult result) {
-        // 检查是否启用去重功能
-        if (deduplicateCheckbox.isSelected()) {
-            if (processedUrls.contains(result.getUrl())) {
-                return; // 如果启用了去重并且URL已处理过，则跳过
-            }
-            processedUrls.add(result.getUrl());
-        }
-        
         results.add(result);
-        filterResults(); // 更新过滤后的结果
+        filterResults();
     }
     
     private void filterResults() {
         String searchText = searchField.getText().trim();
         filteredResults.clear();
-        
-        // 获取工具来源筛选选项
-        boolean showProxy = proxyCheckbox.isSelected();
-        boolean showIntruder = intruderCheckbox.isSelected();
-        boolean showRepeater = repeaterCheckbox.isSelected();
         
         // 获取状态码筛选选项
         boolean show2xx = status2xxCheckbox.isSelected();
@@ -356,17 +338,15 @@ public class SourceMapUI {
         if (searchText.isEmpty()) {
             filteredResults.addAll(statusFilteredResults);
         } else {
-            // 实现通配符匹配
-            String regexPattern;
-            if (searchText.startsWith("*.")) {
-                // 特殊处理 *.domain.com 格式，匹配所有包含 domain.com 的域名
-                String domain = searchText.substring(2); // 移除 "*."
-                regexPattern = ".*" + Pattern.quote(domain) + ".*";
-            } else {
-                // 普通通配符处理
-                regexPattern = searchText.replace("*", ".*").replace(".", "\\.");
+            // 实现通配符匹配：先将用户输入按 * 分割，逐段转义后以 .* 连接
+            String[] parts = searchText.split("\\*", -1);
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < parts.length; i++) {
+                if (i > 0) sb.append(".*");
+                sb.append(Pattern.quote(parts[i]));
             }
-            
+            String regexPattern = sb.toString();
+
             Pattern pattern;
             try {
                 pattern = Pattern.compile(regexPattern, Pattern.CASE_INSENSITIVE);
@@ -406,8 +386,30 @@ public class SourceMapUI {
             }
         }
         
+        // 排除指定域名
+        String excludeText = excludeField.getText().trim();
+        if (!excludeText.isEmpty()) {
+            String[] excludeDomains = excludeText.split("\\|");
+            filteredResults.removeIf(result -> {
+                try {
+                    URL url = new URL(result.getUrl());
+                    String host = url.getHost().toLowerCase();
+                    for (String domain : excludeDomains) {
+                        String d = domain.trim().toLowerCase();
+                        if (d.isEmpty()) continue;
+                        // 精确匹配域名 或 匹配子域名（host 以 ".domain" 结尾）
+                        if (host.equals(d) || host.endsWith("." + d)) {
+                            return true;
+                        }
+                    }
+                } catch (MalformedURLException e) {
+                    // URL 格式无效则不排除
+                }
+                return false;
+            });
+        }
+
         tableModel.fireTableDataChanged();
-        setupColumnWidths();
     }
     
     public Component getUiComponent() {
@@ -421,6 +423,7 @@ public class SourceMapUI {
     
     private void showDetailDialog(SourceMapResult result) {
         JDialog dialog = new JDialog((JFrame) null, "SourceMap Detail", true);
+        dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
         dialog.setLayout(new BorderLayout());
         
         JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT);
@@ -510,16 +513,17 @@ public class SourceMapUI {
         }
     }
     
-    // Getters for tool source checkboxes
-    public JCheckBox getProxyCheckbox() {
-        return proxyCheckbox;
-    }
-    
-    public JCheckBox getIntruderCheckbox() {
-        return intruderCheckbox;
-    }
-    
-    public JCheckBox getRepeaterCheckbox() {
-        return repeaterCheckbox;
+    // 统一的工具来源检查，封装 Checkbox 逻辑
+    public boolean isToolEnabled(ToolSource toolSource) {
+        if (toolSource.isFromTool(ToolType.PROXY) && proxyCheckbox.isSelected()) {
+            return true;
+        }
+        if (toolSource.isFromTool(ToolType.INTRUDER) && intruderCheckbox.isSelected()) {
+            return true;
+        }
+        if (toolSource.isFromTool(ToolType.REPEATER) && repeaterCheckbox.isSelected()) {
+            return true;
+        }
+        return false;
     }
 }

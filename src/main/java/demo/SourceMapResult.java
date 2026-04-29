@@ -1,8 +1,6 @@
 package demo;
 
 import burp.api.montoya.core.ByteArray;
-import burp.api.montoya.http.message.requests.HttpRequest;
-import burp.api.montoya.http.message.responses.HttpResponse;
 
 public class SourceMapResult {
     private final String url;
@@ -11,24 +9,6 @@ public class SourceMapResult {
     private final ByteArray request;
     private final ByteArray response;
     private final boolean maybeVuln;
-
-    public SourceMapResult(String url, int statusCode, int responseLength) {
-        this.url = url;
-        this.statusCode = statusCode;
-        this.responseLength = responseLength;
-        this.request = ByteArray.byteArray("");
-        this.response = ByteArray.byteArray("");
-        this.maybeVuln = false;
-    }
-
-    public SourceMapResult(String url, int statusCode, int responseLength, ByteArray request, ByteArray response) {
-        this.url = url;
-        this.statusCode = statusCode;
-        this.responseLength = responseLength;
-        this.request = request;
-        this.response = response;
-        this.maybeVuln = false;
-    }
 
     public SourceMapResult(String url, int statusCode, int responseLength, ByteArray request, ByteArray response, boolean maybeVuln) {
         this.url = url;
